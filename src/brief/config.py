@@ -45,12 +45,14 @@ class Settings(BaseSettings):
     # can't silently change the brief's voice overnight.
     anthropic_synthesis_model: str = "claude-opus-5"
     anthropic_triage_model: str = "claude-haiku-4-5"
-    # Current stable flagship. It returns 503 under load often enough to matter
-    # for an unattended 7am job, so each call walks this chain on 503/429/404.
-    # Verified 2026-09-21: 3.8 live, 3.5 live, 2.5-flash returns 404 (retired).
-    gemini_synthesis_model: str = "gemini-3.8-flash"
-    gemini_triage_model: str = "gemini-3.8-flash"
-    gemini_fallback_models: str = "gemini-3.5-flash,gemini-3.6-flash"
+    # 3.5-flash leads because it is the one that actually answers. Measured
+    # 2026-09-21 across two API keys in different projects: 3.8-flash (the
+    # flagship) returned 503 on every single call, 3.5-flash returned 200 on
+    # every call, and 2.5-flash is retired and 404s. The chain still ends at
+    # 3.8 so it gets used again once Google's capacity recovers.
+    gemini_synthesis_model: str = "gemini-3.5-flash"
+    gemini_triage_model: str = "gemini-3.5-flash"
+    gemini_fallback_models: str = "gemini-3.6-flash,gemini-3.8-flash"
 
     @property
     def gemini_chain(self) -> list[str]:

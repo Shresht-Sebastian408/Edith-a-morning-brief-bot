@@ -77,8 +77,11 @@ async def test_503_on_every_model_raises_rather_than_retrying_forever(monkeypatc
     with pytest.raises(llm.LLMUnavailable, match="every gemini model failed"):
         await llm._gemini(settings(), "gemini-3.8-flash", "sys", "prompt", Dummy)
 
-    # Two rounds over a three-model chain.
-    assert len(attempts) == 6
+    # Two rounds over the chain, whatever length the configured chain is.
+    chain = ["gemini-3.8-flash"] + [
+        m for m in settings().gemini_chain if m != "gemini-3.8-flash"
+    ]
+    assert len(attempts) == 2 * len(chain)
     assert attempts[0] == "gemini-3.8-flash"
 
 

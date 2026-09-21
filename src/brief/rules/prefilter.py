@@ -98,6 +98,8 @@ HIGH_KEYWORDS: tuple[str, ...] = (
 
 # Domains that always matter regardless of keywords: your university, and the
 # platforms that carry opportunities. Add your college domain here.
+# Deliberately NOT github.com - almost all of its mail is automated build and
+# notification noise, and boosting it put "Run failed" into a morning brief.
 ALWAYS_KEEP_DOMAINS: set[str] = {
     "unstop.com",
     "unstop.news",  # Unstop sends from a separate notification domain
@@ -105,7 +107,6 @@ ALWAYS_KEEP_DOMAINS: set[str] = {
     "dora.hackerearth.com",
     "hackerearth.com",
     "mlh.io",
-    "github.com",
 }
 
 # Calendar titles matching these are CRITICAL regardless of how far out they are.

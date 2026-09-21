@@ -126,6 +126,12 @@ async def build_brief(settings: Settings, reports: list[AgentReport]) -> Brief:
     return brief
 
 
+def _as_sentence(text: str) -> str:
+    """Headlines often already end in punctuation; "news!." reads badly aloud."""
+    text = text.strip()
+    return text if text.endswith((".", "!", "?")) else text + "."
+
+
 def _empty_brief(now: datetime, failed: list[AgentReport]) -> Brief:
     """No signals. Distinguish a genuinely quiet day from a broken pipeline.
 
@@ -186,7 +192,7 @@ def _mechanical_brief(
     Deliberately plain. This exists so a provider outage degrades the brief's
     prose rather than cancelling the morning entirely.
     """
-    spoken = " ".join(f"{s.headline}." for s in loud[:6]) or "Nothing urgent today."
+    spoken = " ".join(_as_sentence(s.headline) for s in loud[:6]) or "Nothing urgent today."
     sections: list[BriefSection] = []
     for priority in (Priority.CRITICAL, Priority.HIGH, Priority.CONTEXT):
         bullets = [s.headline for s in signals if s.priority is priority]
