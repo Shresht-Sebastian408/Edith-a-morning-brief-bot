@@ -28,6 +28,11 @@ log = logging.getLogger(__name__)
 # Spacing between full passes over the model chain. The first pass is
 # immediate; later ones give a saturated backend time to recover.
 _RETRY_DELAYS = (0, 6, 20)
+# Ceiling on one request. The SDK otherwise retries internally for minutes.
+_REQUEST_TIMEOUT_MS = 25_000
+# Ceiling on one tier, retries included. Past this the caller degrades to a
+# rules-only or mechanically assembled brief rather than missing the morning.
+_TIER_DEADLINE_SECONDS = 100
 
 T = TypeVar("T", bound=BaseModel)
 Tier = Literal["triage", "synthesis"]
@@ -83,7 +88,13 @@ async def _gemini(
     from google.genai import types
 
     settings.require("gemini_api_key")
-    client = genai.Client(api_key=settings.gemini_api_key)
+    # Without an explicit timeout the SDK runs its own internal retry-and-backoff
+    # inside a single call. Observed in production: one request sat for 2m07s
+    # before surfacing a 503, and nine of those overran the job timeout entirely.
+    client = genai.Client(
+        api_key=settings.gemini_api_key,
+        http_options=types.HttpOptions(timeout=_REQUEST_TIMEOUT_MS),
+    )
     config = types.GenerateContentConfig(
         system_instruction=system,
         response_mime_type="application/json",
@@ -100,41 +111,52 @@ async def _gemini(
     # So each round walks the whole chain, and rounds are spaced out. A 7am
     # cron can afford to wait half a minute; it cannot afford to skip a day.
     candidates = [model] + [m for m in settings.gemini_chain if m != model]
-    response = None
     failures: list[str] = []
 
-    for round_index, delay in enumerate(_RETRY_DELAYS):
-        if delay:
-            log.info("gemini saturated, waiting %ss before retry %d", delay, round_index)
-            await asyncio.sleep(delay)
+    async def walk_chain():
+        for round_index, delay in enumerate(_RETRY_DELAYS):
+            if delay:
+                log.info("gemini saturated, waiting %ss before retry %d", delay, round_index)
+                await asyncio.sleep(delay)
 
-        for candidate in candidates:
-            try:
-                response = await client.aio.models.generate_content(
-                    model=candidate, contents=prompt, config=config
-                )
-                if candidate != model or round_index:
-                    log.warning(
-                        "gemini succeeded on %s (attempt round %d)", candidate, round_index
+            for candidate in candidates:
+                try:
+                    result = await client.aio.models.generate_content(
+                        model=candidate, contents=prompt, config=config
                     )
-                break
-            except Exception as exc:  # noqa: BLE001 - provider raises several types
-                text = str(exc)
-                transient = any(
-                    code in text for code in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED")
-                )
-                retired = "404" in text or "NOT_FOUND" in text
-                failures.append(f"{candidate}: {text[:100]}")
-                log.warning("gemini %s failed: %s", candidate, text[:140])
-                if not (transient or retired):
-                    raise
-        if response is not None:
-            break
+                    if candidate != model or round_index:
+                        log.warning(
+                            "gemini succeeded on %s (round %d)", candidate, round_index
+                        )
+                    return result
+                except Exception as exc:  # noqa: BLE001 - provider raises several types
+                    text = str(exc)
+                    transient = any(
+                        c in text for c in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED")
+                    )
+                    retired = "404" in text or "NOT_FOUND" in text
+                    failures.append(f"{candidate}: {text[:90]}")
+                    log.warning("gemini %s failed: %s", candidate, text[:130])
+                    if not (transient or retired):
+                        raise
+        return None
+
+    # A hard ceiling on the whole tier. During a sustained provider outage the
+    # retries above are worth having, but only up to a point: a brief that
+    # arrives at 07:01 written by rules beats one that never arrives because
+    # the job timed out at 07:12. Past the deadline the caller degrades.
+    try:
+        response = await asyncio.wait_for(walk_chain(), timeout=_TIER_DEADLINE_SECONDS)
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        raise LLMUnavailable(
+            f"gemini did not answer within {_TIER_DEADLINE_SECONDS}s "
+            f"({len(failures)} attempts failed) - degrading"
+        ) from exc
 
     if response is None:
         raise LLMUnavailable(
             f"every gemini model failed across {len(_RETRY_DELAYS)} rounds - "
-            + " | ".join(failures[-3:])
+            + " | ".join(failures[-2:])
         )
 
     parsed = response.parsed

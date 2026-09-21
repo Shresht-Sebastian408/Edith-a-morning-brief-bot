@@ -21,7 +21,10 @@ concurrency:
 jobs:
   brief:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The app bounds itself (see _TIER_DEADLINE_SECONDS in llm.py); this is
+    # The app bounds itself (see _TIER_DEADLINE_SECONDS in llm.py); this is
+    # only a backstop against a genuinely hung runner.
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
