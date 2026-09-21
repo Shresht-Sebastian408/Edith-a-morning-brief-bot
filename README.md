@@ -1,4 +1,4 @@
-# Morning Brief
+# EDITH A MORNING BRIEFING BOT
 
 Every morning at 7am, a Telegram message tells me what actually needs my
 attention: the internship email worth opening, the assignment due today, and
