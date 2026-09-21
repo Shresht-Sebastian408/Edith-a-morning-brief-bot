@@ -1,0 +1,24 @@
+.env
+*.env
+!.env.example
+
+# OAuth artifacts - these are credentials, never commit
+client_secret*.json
+token.json
+credentials.json
+
+# Dumped agent reports contain real personal data
+*.report.json
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+out/
+*.ogg
+*.mp3

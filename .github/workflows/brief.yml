@@ -1,0 +1,53 @@
+name: Morning Brief
+
+on:
+  schedule:
+    # GitHub Actions cron is UTC only. 01:15 UTC = 06:45 IST.
+    # Scheduled runs are routinely 5-20 minutes late and are occasionally
+    # dropped entirely under platform load, so this is set early to drift
+    # toward 07:00 rather than past it. IST has no DST, so this stays correct.
+    - cron: "15 1 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the brief in the log instead of sending it"
+        type: boolean
+        default: false
+
+concurrency:
+  group: morning-brief
+  cancel-in-progress: false
+
+jobs:
+  brief:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Ensure ffmpeg
+        run: ffmpeg -version >/dev/null 2>&1 || sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Install
+        run: pip install --quiet -e .
+
+      - name: Send brief
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LLM_SYNTHESIS_PROVIDER: ${{ vars.LLM_SYNTHESIS_PROVIDER || 'gemini' }}
+          LLM_TRIAGE_PROVIDER: ${{ vars.LLM_TRIAGE_PROVIDER || 'gemini' }}
+          TIMEZONE: Asia/Kolkata
+        run: |
+          python -m brief ${{ inputs.dry_run && '--dry-run' || '' }}

@@ -1,0 +1,40 @@
+[project]
+name = "morning-brief"
+version = "0.1.0"
+description = "Autonomous multi-agent morning briefing assistant"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.69",
+    "google-genai>=1.0",
+    "google-api-python-client>=2.150",
+    "google-auth>=2.35",
+    "google-auth-oauthlib>=1.2",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "httpx>=0.27",
+    "edge-tts>=6.1",
+    "gtts>=2.5",
+    # Windows ships no IANA tz database, so ZoneInfo("Asia/Kolkata") fails
+    # without this. Harmless on Linux runners.
+    "tzdata>=2024.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+morning-brief = "brief.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/brief"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
