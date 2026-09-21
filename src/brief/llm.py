@@ -132,7 +132,12 @@ async def _gemini(
                 except Exception as exc:  # noqa: BLE001 - provider raises several types
                     text = str(exc)
                     transient = any(
-                        c in text for c in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED")
+                        c in text
+                        for c in (
+                            "500", "502", "503", "504", "429",
+                            "UNAVAILABLE", "RESOURCE_EXHAUSTED",
+                            "DEADLINE_EXCEEDED", "INTERNAL", "timeout",
+                        )
                     )
                     retired = "404" in text or "NOT_FOUND" in text
                     failures.append(f"{candidate}: {text[:90]}")

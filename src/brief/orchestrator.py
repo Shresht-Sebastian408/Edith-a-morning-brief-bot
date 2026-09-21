@@ -133,13 +133,14 @@ def _empty_brief(now: datetime, failed: list[AgentReport]) -> Brief:
     reporting nothing at all: it is a confident claim that happens to be false,
     and you would act on it.
     """
-    if failed and len(failed) == len(AGENTS):
+    if failed:
         names = " and ".join(r.agent for r in failed)
+        scope = "some sources" if len(failed) < len(AGENTS) else "anything"
         brief = Brief(
-            greeting=f"{now:%A, %d %B} - brief unavailable.",
+            greeting=f"{now:%A, %d %B} - brief incomplete.",
             voice_script=(
-                f"Good morning. I couldn't reach {names} this morning, so I have "
-                "nothing to tell you. This is a fault on my side, not a quiet day. "
+                f"Good morning. I couldn't reach {names} this morning, so I don't "
+                "have a full picture. This is a fault on my side, not a quiet day. "
                 "Check the run log when you get a chance."
             ),
             text_sections=[],

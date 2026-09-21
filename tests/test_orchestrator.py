@@ -96,7 +96,7 @@ def test_total_failure_is_not_reported_as_a_quiet_day():
 
     brief = _empty_brief(now, failed)
 
-    assert "unavailable" in brief.greeting
+    assert "incomplete" in brief.greeting
     assert "couldn't reach" in brief.voice_script
     assert "inbox is clear" not in brief.voice_script
     # The failure detail belongs in text, not read aloud.
@@ -122,3 +122,21 @@ def test_partial_failure_is_flagged_without_hijacking_the_voice_script():
 
     assert brief.voice_script == "Two classes today."
     assert brief.text_sections[-1].title.startswith("Incomplete")
+
+
+def test_a_partial_failure_is_not_a_quiet_day_either():
+    """One dead connector and no signals is not "your inbox is clear".
+
+    Regression test: a 504 from the model provider killed the email agent while
+    the calendar agent succeeded with nothing scheduled. The brief then claimed
+    the inbox was clear, having never successfully read it.
+    """
+    from brief.orchestrator import _empty_brief
+
+    brief = _empty_brief(
+        datetime.now(tz=timezone.utc),
+        [AgentReport.failed("email", "504 DEADLINE_EXCEEDED")],
+    )
+
+    assert "inbox is clear" not in brief.voice_script
+    assert "couldn't reach email" in brief.voice_script

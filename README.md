@@ -144,7 +144,7 @@ python -m brief --agent email        # one connector, no model, nothing sent
 python -m brief --dry-run            # whole pipeline, printed
 python -m brief --dry-run --explain  # plus why each email was kept or dropped
 python -m brief                      # send it
-pytest                               # 54 tests, no network required
+pytest                               # 55 tests, no network required
 ```
 
 Start with `--agent email`. It dumps the raw triage as JSON, so when something

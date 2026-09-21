@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from brief.config import Settings
 from brief.connectors.gmail import EmailItem, fetch_recent, message_url
 from brief.contracts import AgentReport, Priority, Signal
-from brief.llm import LLMUnavailable, complete
+from brief.llm import complete
 from brief.rules.prefilter import Verdict, classify_email
 
 log = logging.getLogger(__name__)
@@ -60,6 +60,10 @@ Rules:
 - "critical" means it needs action today or a deadline is imminent. Be sparing.
 - Never invent a deadline that is not stated in the email.
 - Return exactly one entry per email id you were given."""
+
+
+def _short(exc: Exception) -> str:
+    return f"{type(exc).__name__}: {str(exc)[:160]}"
 
 
 class TriagedEmail(BaseModel):
@@ -104,9 +108,14 @@ class EmailAgent:
         by_id = {item.id: item for item in candidates}
         try:
             triage = await self._triage(settings, candidates, boosted)
-        except LLMUnavailable as exc:
-            log.warning("email triage LLM unavailable, falling back to rules: %s", exc)
-            report.errors.append(f"LLM triage skipped: {exc}")
+        except Exception as exc:  # noqa: BLE001 - see below
+            # Deliberately broad. Catching only LLMUnavailable meant a provider
+            # error code I had not enumerated (504 DEADLINE_EXCEEDED, in
+            # production) escaped, failed the whole agent, and threw away eight
+            # already-fetched emails. The mail is in hand by this point; no
+            # model failure justifies discarding it.
+            log.warning("email triage failed, falling back to rules: %s", exc)
+            report.errors.append(f"LLM triage skipped: {_short(exc)}")
             report.signals = self._rule_only_signals(candidates, boosted)
             return report
 

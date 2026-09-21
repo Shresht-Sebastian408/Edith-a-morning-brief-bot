@@ -86,9 +86,12 @@ async def _run(args: argparse.Namespace) -> int:
     await TelegramDelivery(settings).send(brief, audio)
     print("[ok] brief delivered", file=sys.stderr)
 
-    # Agent failures shouldn't block delivery, but they should colour the exit
-    # code so a scheduled run surfaces as degraded rather than silently fine.
-    return 1 if errors else 0
+    # Delivered is success, even if a source failed. A degraded run already
+    # announces itself inside the brief, where it will actually be read. Failing
+    # the workflow as well would paint the run history red on every flaky
+    # provider day, and a red mark that appears most mornings stops being a
+    # signal. Non-zero is reserved for "no brief reached you".
+    return 0
 
 
 def _print_brief(brief: Brief) -> None:
