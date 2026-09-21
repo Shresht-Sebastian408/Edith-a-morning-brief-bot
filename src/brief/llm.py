@@ -15,6 +15,7 @@ final brief through Claude while triage stays on Gemini's free tier.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Literal, TypeVar
 
@@ -23,6 +24,10 @@ from pydantic import BaseModel
 from brief.config import Provider, Settings
 
 log = logging.getLogger(__name__)
+
+# Spacing between full passes over the model chain. The first pass is
+# immediate; later ones give a saturated backend time to recover.
+_RETRY_DELAYS = (0, 6, 20)
 
 T = TypeVar("T", bound=BaseModel)
 Tier = Literal["triage", "synthesis"]
@@ -85,30 +90,52 @@ async def _gemini(
         response_schema=schema,
     )
 
-    # The flagship returns 503 under load, and models get retired without
-    # warning. Neither should cost you the morning, so walk a chain.
+    # Two independent failure modes, needing two different remedies:
+    #
+    #   404  a model was retired - hop to another model, immediately.
+    #   503  the backend is saturated - hopping does not help, because the
+    #        models share it. Waiting does; Google's own message says spikes
+    #        are usually temporary.
+    #
+    # So each round walks the whole chain, and rounds are spaced out. A 7am
+    # cron can afford to wait half a minute; it cannot afford to skip a day.
     candidates = [model] + [m for m in settings.gemini_chain if m != model]
     response = None
     failures: list[str] = []
 
-    for candidate in candidates:
-        try:
-            response = await client.aio.models.generate_content(
-                model=candidate, contents=prompt, config=config
-            )
-            if candidate != model:
-                log.warning("gemini fell back to %s", candidate)
+    for round_index, delay in enumerate(_RETRY_DELAYS):
+        if delay:
+            log.info("gemini saturated, waiting %ss before retry %d", delay, round_index)
+            await asyncio.sleep(delay)
+
+        for candidate in candidates:
+            try:
+                response = await client.aio.models.generate_content(
+                    model=candidate, contents=prompt, config=config
+                )
+                if candidate != model or round_index:
+                    log.warning(
+                        "gemini succeeded on %s (attempt round %d)", candidate, round_index
+                    )
+                break
+            except Exception as exc:  # noqa: BLE001 - provider raises several types
+                text = str(exc)
+                transient = any(
+                    code in text for code in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED")
+                )
+                retired = "404" in text or "NOT_FOUND" in text
+                failures.append(f"{candidate}: {text[:100]}")
+                log.warning("gemini %s failed: %s", candidate, text[:140])
+                if not (transient or retired):
+                    raise
+        if response is not None:
             break
-        except Exception as exc:  # noqa: BLE001 - provider raises several types
-            text = str(exc)
-            transient = any(code in text for code in ("503", "429", "404", "UNAVAILABLE"))
-            failures.append(f"{candidate}: {text[:120]}")
-            log.warning("gemini %s failed: %s", candidate, text[:160])
-            if not transient:
-                raise
 
     if response is None:
-        raise LLMUnavailable("every gemini model failed - " + " | ".join(failures))
+        raise LLMUnavailable(
+            f"every gemini model failed across {len(_RETRY_DELAYS)} rounds - "
+            + " | ".join(failures[-3:])
+        )
 
     parsed = response.parsed
     if parsed is None:
