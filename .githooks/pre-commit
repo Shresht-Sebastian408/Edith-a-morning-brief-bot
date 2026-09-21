@@ -1,0 +1,50 @@
+#!/bin/sh
+# Blocks commits containing credentials.
+#
+# .gitignore already keeps .env out, but a hook catches the cases it cannot:
+# a key pasted into a source file, a token hardcoded "just to test", an .env
+# added with `git add -f`. Enable once per clone:
+#
+#     git config core.hooksPath .githooks
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+fail=0
+
+for f in $staged; do
+	case "$f" in
+		.env|*.env|*/.env)
+			if [ "$f" != ".env.example" ]; then
+				echo "BLOCKED: $f is an environment file and must not be committed."
+				fail=1
+			fi
+			;;
+		client_secret*.json|token.json|credentials.json)
+			echo "BLOCKED: $f looks like a credential file."
+			fail=1
+			;;
+	esac
+done
+
+# Scan staged content. .env.example is skipped: it holds placeholders by design.
+patterns='AIza[0-9A-Za-z_-]{35}|AQ\.[A-Za-z0-9_-]{20,}|[0-9]{8,10}:[A-Za-z0-9_-]{35}|private-[0-9a-f]{32}|BEGIN [A-Z ]*PRIVATE KEY'
+
+for f in $staged; do
+	[ "$f" = ".env.example" ] && continue
+	[ "$f" = ".githooks/pre-commit" ] && continue
+	if git show ":$f" 2>/dev/null | grep -qE "$patterns"; then
+		echo "BLOCKED: $f contains something shaped like an API key or token."
+		fail=1
+	fi
+done
+
+if [ "$fail" -ne 0 ]; then
+	echo ""
+	echo "Nothing was committed. Move the secret into .env (already ignored)"
+	echo "and read it via src/brief/config.py."
+	echo "To override in a genuine false positive: git commit --no-verify"
+	exit 1
+fi
+
+exit 0

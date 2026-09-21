@@ -1,179 +1,239 @@
-# Autonomous Morning Briefing Assistant
+# Morning Brief
 
-A supervisor agent coordinates specialist subagents that triage your inbox and
-calendar overnight, then delivers a morning brief to Telegram as text plus a
-playable voice note.
+Every morning at 7am, a Telegram message tells me what actually needs my
+attention: the internship email worth opening, the assignment due today, and
+nothing else. There's a voice note too, so I can listen while getting ready
+instead of staring at my phone.
 
-## The architecture, in one rule
+I built it because my inbox is mostly Quora digests and my calendar is mostly
+noise, and I kept missing the two emails a week that mattered.
 
-> **Raw data never reaches the orchestrator.**
+## How it works
 
-Each agent owns one noisy source and reduces it to a short list of `Signal`
-objects (`src/brief/contracts.py`). A 60-email inbox reaches the supervisor as
-roughly six signals of about 30 tokens each.
-
-That single constraint is what makes the multi-agent split pay for itself. The
-orchestrator's context stays small and flat as agents are added, because it
-never learns what the sources actually return. Adding a WhatsApp agent later
-costs the supervisor nothing.
+Small agents, one per source, each answering a single question: is anything
+here worth this person's morning? A supervisor collects their answers and
+writes the brief.
 
 ```
-Gmail (IMAP) ──> EmailAgent    ─┐
-                                ├─> Orchestrator ──> Brief ──> Telegram (text + voice)
-Calendar (iCal) ──> CalendarAgent ┘
+Gmail (IMAP)    ──> EmailAgent    ─┐
+                                   ├──> Orchestrator ──> Telegram
+Calendar (iCal) ──> CalendarAgent ─┘                     text + voice note
 ```
 
-The payoff is not theoretical: this project swapped its entire authentication
-mechanism (Google OAuth to IMAP + iCal) by rewriting two connector files. The
-contracts, agents, rules, orchestrator, delivery layer and every existing test
-were untouched.
+The rule that holds the whole thing together:
 
-Each agent runs a three-stage funnel, cheapest filter first:
+> Raw data never reaches the orchestrator.
 
-| Stage | Cost | What it does |
+Agents reduce their source to a list of `Signal` objects before handing
+anything up. Sixty emails become about six signals of thirty tokens each. The
+supervisor never learns what Gmail's API returns, so its context stays small no
+matter how many agents I add later.
+
+I didn't set out to test that claim. Partway through building this I had to bin
+Google OAuth entirely and switch to IMAP. It took rewriting two
+connector files. Every agent, rule, prompt and test was untouched, and all 28
+tests at the time passed without a single edit.
+
+### Filtering happens in three stages, cheapest first
+
+| Stage | Cost | What it removes |
 |---|---|---|
-| Source query | free | `X-GM-RAW` excludes promotions/social server-side |
-| Deterministic rules | free | Drops known noise, promotes known priorities |
-| LLM judgment | pennies | Only the ambiguous middle that survived |
+| Gmail query (`X-GM-RAW`) | free | promotions and social, server-side |
+| Rules in `prefilter.py` | free | known junk senders, known priority keywords |
+| The model | a few paise | only what the first two couldn't decide |
 
-The calendar agent is deliberately **LLM-free** — events arrive already
-structured and timed, so there is no ambiguity worth paying a model to resolve.
+Most mail never becomes a token.
+
+The calendar agent calls no model at all. Events arrive already structured and
+timed, so there is nothing for a model to figure out, and paying for one would
+buy nothing.
 
 ## Setup
 
-### 1. Install
+Takes about fifteen minutes. No Google Cloud project, no OAuth consent screen.
+
+### Install
 
 ```bash
 python -m venv .venv
-.venv/Scripts/activate        # Windows;  source .venv/bin/activate on Linux/Mac
+.venv/Scripts/activate          # Linux/Mac: source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
+git config core.hooksPath .githooks
 ```
 
-### 2. Gmail (app password)
+That last line turns on a pre-commit hook that refuses to commit anything
+shaped like an API key. Worth doing before you touch `.env`.
 
-No Google Cloud project, no OAuth consent screen. Publishing an OAuth app to
-production now requires a homepage, a privacy policy and a DNS-verified domain
-you own — disproportionate for a tool with one user. App passwords need none of
-that and **do not expire**.
+### Gmail
 
-1. Enable [2-Step Verification](https://myaccount.google.com/signinoptions/two-step-verification)
-   if it isn't already. App passwords don't exist without it.
-2. Create one at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords),
-   named `morning-brief`.
-3. Put the 16 characters in `.env` as `GMAIL_APP_PASSWORD` (spaces are ignored),
-   and your address as `GMAIL_ADDRESS`.
+I started with the Gmail API and gave up on it. Publishing an OAuth app to
+production now requires a homepage, a privacy policy, and a domain you own and
+verify by DNS. You cannot use a `github.io` address, because GitHub owns that
+suffix, not you. Writing a privacy policy for software with one user was not a
+good use of an evening.
 
-> **Handle this like a password.** An app password grants full mailbox access,
-> which is broader than the read-only scope OAuth would have given. This code
-> only ever reads — it selects the mailbox `readonly=True` and fetches with
-> `BODY.PEEK`, so nothing is marked as read — but the credential itself permits
-> more. Revoke it any time from the same page. Turning off 2-Step Verification
-> deletes every app password.
+App passwords need none of that, and they don't expire.
 
-### 3. Calendar (secret iCal URL)
+1. Turn on [2-Step Verification](https://myaccount.google.com/signinoptions/two-step-verification).
+   App passwords don't exist without it.
+2. Create one at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords).
+3. Put it in `.env` as `GMAIL_APP_PASSWORD`, with your address as
+   `GMAIL_ADDRESS`. Paste the spaces if you like, the code strips them.
 
-In Google Calendar: hover your calendar in the left sidebar → **⋮** → **Settings
-and sharing** → **Integrate calendar** → copy **"Secret address in iCal
-format"** into `.env` as `CALENDAR_ICAL_URL`.
+Worth knowing what you're trading here. An app password can read *and send*
+your mail, which is more than the read-only OAuth scope would have
+granted. This code only reads. It opens the mailbox `readonly=True` and fetches
+with `BODY.PEEK`, so nothing gets marked as read. But the credential itself
+allows more, so treat it like a password and revoke it from that same page the
+moment you stop using it.
 
-> That URL *is* the credential — anyone holding it can read your calendar. Reset
-> it from the same page if it ever leaks.
+### Calendar
 
-### 4. Telegram
+In Google Calendar, hover your calendar in the sidebar, then open Settings and
+sharing, scroll to "Integrate calendar", and copy the secret address in iCal
+format into `CALENDAR_ICAL_URL`.
 
-1. Message [@BotFather](https://t.me/BotFather), send `/newbot`, copy the token
-   into `.env`.
-2. Open a chat with your new bot and **send it any message** — bots cannot
-   message you first.
-3. `python scripts/get_telegram_chat_id.py` and copy the id into `.env`.
+Anyone with that URL can read your calendar. There's a reset button on the same
+page if it ever gets out.
 
-### 5. ffmpeg (optional locally, automatic in CI)
+### Telegram
 
-Telegram renders audio as a playable voice note only if it is OGG/OPUS, and
-ffmpeg does that transcode. GitHub Actions runners already have it, so this
-matters only for local testing:
+1. Message [@BotFather](https://t.me/BotFather) and send `/newbot`. The username
+   has to end in `bot`.
+2. Open your new bot and press Start. This step is easy to skip and nothing
+   works without it, because a Telegram bot cannot message you until you've
+   messaged it.
+3. Run `python scripts/get_telegram_chat_id.py` and copy the id into `.env`.
+
+### Model
+
+Grab a key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+and set `GEMINI_API_KEY`.
+
+A morning run costs roughly 4K input and 2.3K output tokens across two calls,
+which lands well inside the free tier. I've never paid for it.
+
+Gemini's flagship returns 503 more often than you'd expect. On my first real
+send, every model in the chain was saturated at once. Switching models doesn't
+help, since they share a backend, so each call now walks the chain three times
+with 0, 6 and 20 second gaps. The retry fixed it on the next run: three 503s,
+a six second wait, then the flagship answered. A cron job can afford twenty
+seconds. It can't afford to skip a day.
+
+If you'd rather have Claude write the final brief and leave triage on Gemini,
+set `LLM_SYNTHESIS_PROVIDER=anthropic` and add `ANTHROPIC_API_KEY`. Nothing
+else changes.
+
+### ffmpeg, optional
+
+Telegram only renders audio as a proper voice note if it's OGG/OPUS, and ffmpeg
+does that conversion. GitHub Actions runners have it already. Locally:
 
 ```powershell
-winget install Gyan.FFmpeg     # then restart your terminal
+winget install Gyan.FFmpeg
 ```
 
-Without it the brief still sends — you get an MP3 attachment instead of a voice
-note, and a warning in the log saying so.
-
-### 6. Model provider
-
-Get a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
-and set `GEMINI_API_KEY`. The free tier covers this workload comfortably: a
-morning run is about 4K input and 2.3K output tokens across both calls, against
-a free allowance of hundreds of requests per day.
-
-Google AI Pro also grants $10/month of Cloud credits usable for the Gemini API,
-but they must be activated manually via one.google.com and google.dev. You will
-not need them for this.
-
-Gemini's flagship returns 503 under load often enough to matter for an
-unattended job, so each call walks a fallback chain
-(`GEMINI_FALLBACK_MODELS`). This is not theoretical - it fired on the very
-first real run.
-
-To route the final brief through Claude while triage stays on Gemini, set
-`LLM_SYNTHESIS_PROVIDER=anthropic` and `ANTHROPIC_API_KEY`. Only the provider
-changes; no code does.
+Skip it and the brief still arrives, just as an MP3 attachment instead of a
+waveform you can tap.
 
 ## Running it
 
 ```bash
-python -m brief --agent calendar     # one connector, no LLM, no send
-python -m brief --agent email
-python -m brief --dry-run            # full pipeline, printed not sent
-python -m brief --dry-run --explain  # also show why each email was kept/dropped
-python -m brief --no-voice           # send text only
-python -m brief                      # for real
-pytest                               # 49 tests, no network needed
+python -m brief --agent email        # one connector, no model, nothing sent
+python -m brief --dry-run            # whole pipeline, printed
+python -m brief --dry-run --explain  # plus why each email was kept or dropped
+python -m brief                      # send it
+pytest                               # 49 tests, no network required
 ```
 
-Run `--agent email` before `--dry-run`. It prints raw triage as JSON, so when
-something looks wrong you can tell whether it's the connector or the model.
+Start with `--agent email`. It dumps the raw triage as JSON, so when something
+looks wrong you can tell immediately whether the connector or the model is at
+fault.
 
-`--explain` is the one to reach for when the brief *misses* something. Silent
-filtering is how a brief quietly starts being wrong.
+Use `--explain` when the brief *misses* something. Stuff gets dropped quietly,
+and you won't notice for weeks.
 
-## Scheduling
+## Running it at 7am
 
-`.github/workflows/brief.yml` runs at `01:15 UTC` (06:45 IST). Add every key in
-`.env` as a repository secret under **Settings → Secrets and variables →
-Actions**, then trigger a manual run before trusting the cron:
+`.github/workflows/brief.yml` fires at 01:15 UTC, which is 06:45 IST. Add each
+value from `.env` as a repository secret under Settings, then Secrets and
+variables, then Actions. Test it by hand before trusting the schedule:
 
 ```bash
 gh workflow run brief.yml -f dry_run=true
 ```
 
-Two things to know about Actions cron: it is UTC-only (IST has no DST, so the
-offset stays correct year-round), and scheduled runs are routinely 5–20 minutes
-late and occasionally dropped under platform load. The schedule is set early to
-drift toward 07:00 rather than past it. If missed mornings become annoying, the
-fix is moving the runner, not rewriting the app.
+GitHub's cron is UTC only. India has no daylight saving, so the offset stays
+right all year. Scheduled runs also tend to fire five to twenty minutes late and
+occasionally get dropped when GitHub is busy, which is why the time is set early
+enough to drift toward 7am rather than past it. If missed mornings start
+annoying you, move the runner. Don't rewrite the app.
 
-## Tuning it
+## Making it yours
 
-`src/brief/rules/prefilter.py` holds your taste as editable data — noise
-domains, priority keywords, always-keep senders. Add your university domain to
-`ALWAYS_KEEP_DOMAINS`. `tests/test_prefilter.py` is the guard rail for edits
-there.
+`src/brief/rules/prefilter.py` holds all the personal taste as plain data: junk
+domains, priority keywords, senders that always matter. Add your university's
+domain to `ALWAYS_KEEP_DOMAINS`. The tests in `tests/test_prefilter.py` exist to
+catch you breaking it.
 
-The brief's voice lives in two prompts: `SYSTEM` in `agents/email_agent.py`
-(what counts as important) and `SYSTEM` in `orchestrator.py` (how it is written
-and spoken).
+Two prompts control the writing. `SYSTEM` in `agents/email_agent.py` decides
+what counts as important. `SYSTEM` in `orchestrator.py` decides how the brief
+reads and sounds.
 
-## What is not here, and why
+## Things that only broke against real mail
 
-| Source | Status | Reason |
-|---|---|---|
-| WhatsApp | deferred | The official Cloud API cannot read personal chats or groups — it only sees messages sent to a registered *business* number. The unofficial route (Baileys/whatsapp-web.js) is a ToS violation with a well-documented ban rate. |
-| Instagram DMs | dropped | Personal accounts lost API access with the Basic Display API deprecation. Even after converting to a Creator account, the Messaging API only exposes DMs sent to you *after* someone messages first. |
-| A ringing phone call | deferred | Telegram **bots cannot place calls** — that is an MTProto user-account capability. A real call needs a *second* Telegram account (you cannot call yourself) driving `pytgcalls`. The voice note is the 95% version with none of that. |
+Worth writing down, because none of these showed up in testing.
 
-Both deferred items need an always-on host with a persistent session, so they
-would force a move off GitHub Actions. Because agents sit behind one interface
-(`agents/base.py`) and delivery behind another, neither is a rewrite.
+Unstop mail was being silently dropped. My domain matching was an exact set
+lookup while the comment above it claimed it handled subdomains, and Unstop
+turns out to send from `unstop.news` anyway, not `unstop.com`. An email titled
+"Google is hiring interns!" went straight in the bin.
+
+Email previews were full of CSS. Stripping HTML tags leaves the contents of
+`<style>` blocks behind, so triage was reading stylesheets.
+
+The 16KB fetch limit cut newsletters off mid-`<style>`, which left the block
+unclosed, which made my cleanup regex eat the entire message and return nothing.
+Raised to 64KB.
+
+The one that bothered me most: when every connector was broken, the brief
+cheerfully announced "your inbox is clear". A confident
+lie you'd act on is worse than an error, so it now tells you the difference
+between a quiet day and a broken one.
+
+## What's deliberately missing
+
+I wanted WhatsApp and Instagram in this. Both turned out to be dead ends.
+
+WhatsApp's official Cloud API cannot read personal chats or group messages at
+all. It only sees messages sent to a registered business number. The unofficial
+libraries work, but they violate the terms of service and get numbers banned
+often enough that I'd rather not gamble my actual WhatsApp account on a
+convenience feature.
+
+Instagram personal accounts lost API access when the Basic Display API was
+deprecated. Converting to a Creator account gets you the Messaging API, which
+only shows DMs from people who messaged you first, so it would miss most of what
+I wanted it for.
+
+The voice note is a voice note and not a phone call because Telegram bots can't
+place calls. That's an account-level capability, so a real call needs a second
+Telegram account calling your first one. Maybe later.
+
+Both of the deferred ones need a machine that's always on with a persistent
+session, so they'd mean leaving GitHub Actions. Agents sit behind one interface
+and delivery behind another, so neither would be a rewrite.
+
+## Security
+
+`.env` is gitignored and has never been committed. The pre-commit hook blocks
+env files, credential files, and anything matching the shape of a Google key, a
+Telegram token, or an iCal private path. Override it with `--no-verify` if it
+ever cries wolf.
+
+If you fork this, keep the repo private until you've checked your own history.
+```bash
+git log --all -p | grep -iE "AIza|AQ\.|private-[0-9a-f]{32}"
+```
+Empty output means you're fine.
