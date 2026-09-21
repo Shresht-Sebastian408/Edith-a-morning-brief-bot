@@ -9,13 +9,12 @@ from zoneinfo import ZoneInfo
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Read-only throughout. This system never sends mail, never modifies a calendar,
-# and never marks anything as read. Widening these is a deliberate decision, not
-# an accident of copy-paste.
-GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/calendar.readonly",
-]
+# Gmail's IMAP endpoint. Reads use BODY.PEEK, which does not set the \Seen
+# flag, so nothing in your inbox is marked as read by this system. Nothing is
+# ever sent, deleted or moved either - but note that an app password grants
+# more than that, so it is a credential to protect like a password.
+IMAP_HOST = "imap.gmail.com"
+IMAP_PORT = 993
 
 Provider = Literal["anthropic", "gemini", "none"]
 
@@ -27,9 +26,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    google_client_id: str = ""
-    google_client_secret: str = ""
-    google_refresh_token: str = ""
+    gmail_address: str = ""
+    gmail_app_password: str = ""
+    calendar_ical_url: str = ""
 
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""

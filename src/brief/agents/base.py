@@ -40,18 +40,24 @@ async def run_safely(agent: Agent, settings: Settings) -> AgentReport:
 def _humanise(exc: Exception) -> str:
     """Turn common, cryptic failures into something actionable at 7am."""
     text = str(exc)
-    if "invalid_grant" in text:
+    lowered = text.lower()
+
+    if "authenticationfailed" in lowered or "invalid credentials" in lowered:
         return (
-            "Google refused the refresh token (invalid_grant). The usual cause is "
-            "an OAuth consent screen still set to 'Testing', which expires refresh "
-            "tokens after 7 days. Set it to 'In production' and re-run "
-            "scripts/bootstrap_google_auth.py."
+            "Gmail rejected the login. Check GMAIL_APP_PASSWORD is the 16-character "
+            "app password (spaces are fine) and not your normal account password, "
+            "and that 2-Step Verification is still enabled - turning it off deletes "
+            "every app password."
         )
-    if "insufficient" in text.lower() and "scope" in text.lower():
+    if "did not return a calendar feed" in lowered:
+        return text
+    if "404" in text and "ical" in lowered:
         return (
-            "Google token is missing a scope. Re-run scripts/bootstrap_google_auth.py "
-            "to re-consent with the current scope list."
+            "The calendar iCal URL returned 404. It was probably reset. Get a fresh "
+            "secret address from Google Calendar settings."
         )
-    if "429" in text or "RESOURCE_EXHAUSTED" in text:
+    if "429" in text or "resource_exhausted" in lowered:
         return f"Rate limited by the model provider: {text[:200]}"
+    if "timed out" in lowered or "timeout" in lowered:
+        return f"Network timeout reaching the source: {text[:200]}"
     return f"{type(exc).__name__}: {text[:300]}"

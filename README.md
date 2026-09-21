@@ -14,20 +14,25 @@ roughly six signals of about 30 tokens each.
 
 That single constraint is what makes the multi-agent split pay for itself. The
 orchestrator's context stays small and flat as agents are added, because it
-never learns what Gmail's API actually returns. Adding a WhatsApp agent later
+never learns what the sources actually return. Adding a WhatsApp agent later
 costs the supervisor nothing.
 
 ```
-Gmail  ──> EmailAgent    ─┐
-                          ├─> Orchestrator ──> Brief ──> Telegram (text + voice)
-Calendar ──> CalendarAgent ┘
+Gmail (IMAP) ──> EmailAgent    ─┐
+                                ├─> Orchestrator ──> Brief ──> Telegram (text + voice)
+Calendar (iCal) ──> CalendarAgent ┘
 ```
+
+The payoff is not theoretical: this project swapped its entire authentication
+mechanism (Google OAuth to IMAP + iCal) by rewriting two connector files. The
+contracts, agents, rules, orchestrator, delivery layer and every existing test
+were untouched.
 
 Each agent runs a three-stage funnel, cheapest filter first:
 
 | Stage | Cost | What it does |
 |---|---|---|
-| Source query | free | Gmail excludes promotions/social server-side |
+| Source query | free | `X-GM-RAW` excludes promotions/social server-side |
 | Deterministic rules | free | Drops known noise, promotes known priorities |
 | LLM judgment | pennies | Only the ambiguous middle that survived |
 
@@ -45,32 +50,37 @@ pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-### 2. Google (Gmail + Calendar)
+### 2. Gmail (app password)
 
-In [Google Cloud Console](https://console.cloud.google.com/):
+No Google Cloud project, no OAuth consent screen. Publishing an OAuth app to
+production now requires a homepage, a privacy policy and a DNS-verified domain
+you own — disproportionate for a tool with one user. App passwords need none of
+that and **do not expire**.
 
-1. Enable the **Gmail API** and **Google Calendar API**.
-2. **OAuth consent screen** → External → add yourself as a test user →
-   **click "PUBLISH APP"** so the status reads *In production*.
+1. Enable [2-Step Verification](https://myaccount.google.com/signinoptions/two-step-verification)
+   if it isn't already. App passwords don't exist without it.
+2. Create one at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords),
+   named `morning-brief`.
+3. Put the 16 characters in `.env` as `GMAIL_APP_PASSWORD` (spaces are ignored),
+   and your address as `GMAIL_ADDRESS`.
 
-   > This step is not optional. While the status is *Testing*, Google expires
-   > every refresh token after exactly 7 days and your brief dies each week with
-   > an opaque `invalid_grant`. Publishing does **not** require verification for
-   > personal use under 100 users — you click through one "unverified app"
-   > warning during the next step.
+> **Handle this like a password.** An app password grants full mailbox access,
+> which is broader than the read-only scope OAuth would have given. This code
+> only ever reads — it selects the mailbox `readonly=True` and fetches with
+> `BODY.PEEK`, so nothing is marked as read — but the credential itself permits
+> more. Revoke it any time from the same page. Turning off 2-Step Verification
+> deletes every app password.
 
-3. **Credentials** → Create OAuth client ID → **Desktop app**. Put the id and
-   secret in `.env`.
-4. Run the consent flow and copy the printed token into `.env`:
+### 3. Calendar (secret iCal URL)
 
-```bash
-python scripts/bootstrap_google_auth.py
-```
+In Google Calendar: hover your calendar in the left sidebar → **⋮** → **Settings
+and sharing** → **Integrate calendar** → copy **"Secret address in iCal
+format"** into `.env` as `CALENDAR_ICAL_URL`.
 
-Scopes are read-only (`gmail.readonly`, `calendar.readonly`). This system never
-sends mail, modifies a calendar, or marks anything as read.
+> That URL *is* the credential — anyone holding it can read your calendar. Reset
+> it from the same page if it ever leaks.
 
-### 3. Telegram
+### 4. Telegram
 
 1. Message [@BotFather](https://t.me/BotFather), send `/newbot`, copy the token
    into `.env`.
@@ -78,7 +88,7 @@ sends mail, modifies a calendar, or marks anything as read.
    message you first.
 3. `python scripts/get_telegram_chat_id.py` and copy the id into `.env`.
 
-### 4. ffmpeg (optional locally, automatic in CI)
+### 5. ffmpeg (optional locally, automatic in CI)
 
 Telegram renders audio as a playable voice note only if it is OGG/OPUS, and
 ffmpeg does that transcode. GitHub Actions runners already have it, so this
@@ -88,23 +98,23 @@ matters only for local testing:
 winget install Gyan.FFmpeg     # then restart your terminal
 ```
 
-Without it the brief still sends — you get an MP3 attachment instead of a
-voice note, and a warning in the log saying so.
+Without it the brief still sends — you get an MP3 attachment instead of a voice
+note, and a warning in the log saying so.
 
-### 5. Model provider
+### 6. Model provider
 
 Get a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
 and set `GEMINI_API_KEY`. The free tier covers this workload comfortably: a
-morning run is about 4K input and 2.3K output tokens across both calls, and the
-free tier allows hundreds of requests per day against the two to six this uses.
+morning run is about 4K input and 2.3K output tokens across both calls, against
+a free allowance of hundreds of requests per day.
 
 Google AI Pro also grants $10/month of Cloud credits usable for the Gemini API,
 but they must be activated manually via one.google.com and google.dev. You will
 not need them for this.
 
-To route the final brief through Claude instead while triage stays on Gemini,
-set `LLM_SYNTHESIS_PROVIDER=anthropic` and `ANTHROPIC_API_KEY`. Only the
-provider changes; no code does.
+To route the final brief through Claude while triage stays on Gemini, set
+`LLM_SYNTHESIS_PROVIDER=anthropic` and `ANTHROPIC_API_KEY`. Only the provider
+changes; no code does.
 
 ## Running it
 
@@ -115,10 +125,13 @@ python -m brief --dry-run            # full pipeline, printed not sent
 python -m brief --dry-run --explain  # also show why each email was kept/dropped
 python -m brief --no-voice           # send text only
 python -m brief                      # for real
-pytest                               # rule tests
+pytest                               # 43 tests, no network needed
 ```
 
-`--explain` is the one to reach for when the brief misses something. Silent
+Run `--agent email` before `--dry-run`. It prints raw triage as JSON, so when
+something looks wrong you can tell whether it's the connector or the model.
+
+`--explain` is the one to reach for when the brief *misses* something. Silent
 filtering is how a brief quietly starts being wrong.
 
 ## Scheduling
@@ -145,8 +158,8 @@ domains, priority keywords, always-keep senders. Add your university domain to
 there.
 
 The brief's voice lives in two prompts: `SYSTEM` in `agents/email_agent.py`
-(what counts as important) and `SYSTEM` in `orchestrator.py` (how it is
-written and spoken).
+(what counts as important) and `SYSTEM` in `orchestrator.py` (how it is written
+and spoken).
 
 ## What is not here, and why
 
