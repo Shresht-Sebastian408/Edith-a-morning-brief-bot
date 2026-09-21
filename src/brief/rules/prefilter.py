@@ -20,8 +20,8 @@ from brief.connectors.gmail import EmailItem
 # PERSONAL RULES - edit freely
 # ---------------------------------------------------------------------------
 
-# Senders whose mail is never worth a morning mention. Matched against the
-# sender's domain, so "quora.com" also covers "mail.quora.com".
+# Senders whose mail is never worth a morning mention. Matched as a domain
+# suffix, so "quora.com" also covers "mail.quora.com".
 NOISE_DOMAINS: set[str] = {
     "quora.com",
     "facebookmail.com",
@@ -100,6 +100,7 @@ HIGH_KEYWORDS: tuple[str, ...] = (
 # platforms that carry opportunities. Add your college domain here.
 ALWAYS_KEEP_DOMAINS: set[str] = {
     "unstop.com",
+    "unstop.news",  # Unstop sends from a separate notification domain
     "devpost.com",
     "dora.hackerearth.com",
     "hackerearth.com",
@@ -132,6 +133,21 @@ class Verdict(str, Enum):
     PASS = "pass"      # ambiguous - let the LLM judge
 
 
+def _domain_matches(domain: str, known: set[str]) -> str | None:
+    """Match a sender domain against a set, including subdomains.
+
+    Exact membership is not enough: senders routinely mail from a subdomain
+    (mail.quora.com) or an entirely separate notification domain, so the set
+    holds registrable domains and this walks the suffix.
+    """
+    if not domain:
+        return None
+    for candidate in known:
+        if domain == candidate or domain.endswith("." + candidate):
+            return candidate
+    return None
+
+
 def _contains_any(haystack: str, needles: tuple[str, ...]) -> str | None:
     for needle in needles:
         # Word-boundary match so "sih" doesn't fire on "basic" or "inside".
@@ -153,13 +169,13 @@ def classify_email(item: EmailItem) -> tuple[Verdict, str]:
     # Boosts win over every drop rule below.
     if hit := _contains_any(haystack, CRITICAL_KEYWORDS):
         return Verdict.BOOST, f"critical keyword: {hit}"
-    if item.sender_domain in ALWAYS_KEEP_DOMAINS:
-        return Verdict.BOOST, f"always-keep domain: {item.sender_domain}"
+    if hit := _domain_matches(item.sender_domain, ALWAYS_KEEP_DOMAINS):
+        return Verdict.BOOST, f"always-keep domain: {hit}"
     if hit := _contains_any(haystack, HIGH_KEYWORDS):
         return Verdict.BOOST, f"priority keyword: {hit}"
 
-    if item.sender_domain in NOISE_DOMAINS:
-        return Verdict.DROP, f"noise domain: {item.sender_domain}"
+    if hit := _domain_matches(item.sender_domain, NOISE_DOMAINS):
+        return Verdict.DROP, f"noise domain: {hit}"
     if hit := next((p for p in NOISE_SENDER_PATTERNS if p in sender_blob), None):
         return Verdict.DROP, f"noise sender pattern: {hit}"
     if hit := next((p for p in NOISE_SUBJECT_PATTERNS if p in haystack), None):

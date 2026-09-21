@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Gmail's IMAP endpoint. Reads use BODY.PEEK, which does not set the \Seen
@@ -45,10 +45,27 @@ class Settings(BaseSettings):
     # can't silently change the brief's voice overnight.
     anthropic_synthesis_model: str = "claude-opus-5"
     anthropic_triage_model: str = "claude-haiku-4-5"
-    # Current stable flagship. If you get a 404 or a free-tier 429, fall back
-    # to "gemini-2.5-flash", which has the widest availability.
+    # Current stable flagship. It returns 503 under load often enough to matter
+    # for an unattended 7am job, so each call walks this chain on 503/429/404.
+    # Verified 2026-09-21: 3.8 live, 3.5 live, 2.5-flash returns 404 (retired).
     gemini_synthesis_model: str = "gemini-3.8-flash"
     gemini_triage_model: str = "gemini-3.8-flash"
+    gemini_fallback_models: str = "gemini-3.5-flash,gemini-3.6-flash"
+
+    @property
+    def gemini_chain(self) -> list[str]:
+        return [m.strip() for m in self.gemini_fallback_models.split(",") if m.strip()]
+
+    @field_validator("gmail_app_password", mode="after")
+    @classmethod
+    def _strip_app_password(cls, value: str) -> str:
+        """Google displays app passwords in four spaced groups.
+
+        People paste them exactly as shown, and IMAP LOGIN rejects the spaces
+        with an unhelpful AUTHENTICATIONFAILED, so normalise here rather than
+        make the user notice.
+        """
+        return "".join(value.split())
 
     @property
     def tz(self) -> ZoneInfo:

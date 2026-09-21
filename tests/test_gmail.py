@@ -118,3 +118,25 @@ def test_message_url_converts_decimal_msgid_to_hex():
     assert message_url("1834567890123456789").endswith(hex(1834567890123456789)[2:])
     # A malformed id must degrade to a usable link, not crash the brief.
     assert message_url("not-a-number").startswith("https://mail.google.com")
+
+
+def test_preview_discards_css_and_script_bodies():
+    """Tag-stripping alone leaves stylesheet text, which floods the preview.
+
+    Regression test: real marketing mail produced previews reading
+    "@media (max-width: 600px) { .main-card { width: 100% !important" instead
+    of the actual message, wasting tokens and degrading triage.
+    """
+    import email
+
+    msg_bytes = raw(
+        "From: a@b.com\r\nSubject: S\r\n"
+        'Content-Type: text/html; charset="utf-8"',
+        "<html><head><style>@media (max-width:600px){.card{width:100%!important}}</style></head>"
+        "<body><!-- preheader --><p>Google is hiring interns.</p></body></html>",
+    )
+    preview = _preview(email.message_from_bytes(msg_bytes))
+
+    assert preview == "Google is hiring interns."
+    assert "@media" not in preview
+    assert "preheader" not in preview

@@ -79,16 +79,36 @@ async def _gemini(
 
     settings.require("gemini_api_key")
     client = genai.Client(api_key=settings.gemini_api_key)
-
-    response = await client.aio.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=system,
-            response_mime_type="application/json",
-            response_schema=schema,
-        ),
+    config = types.GenerateContentConfig(
+        system_instruction=system,
+        response_mime_type="application/json",
+        response_schema=schema,
     )
+
+    # The flagship returns 503 under load, and models get retired without
+    # warning. Neither should cost you the morning, so walk a chain.
+    candidates = [model] + [m for m in settings.gemini_chain if m != model]
+    response = None
+    failures: list[str] = []
+
+    for candidate in candidates:
+        try:
+            response = await client.aio.models.generate_content(
+                model=candidate, contents=prompt, config=config
+            )
+            if candidate != model:
+                log.warning("gemini fell back to %s", candidate)
+            break
+        except Exception as exc:  # noqa: BLE001 - provider raises several types
+            text = str(exc)
+            transient = any(code in text for code in ("503", "429", "404", "UNAVAILABLE"))
+            failures.append(f"{candidate}: {text[:120]}")
+            log.warning("gemini %s failed: %s", candidate, text[:160])
+            if not transient:
+                raise
+
+    if response is None:
+        raise LLMUnavailable("every gemini model failed - " + " | ".join(failures))
 
     parsed = response.parsed
     if parsed is None:

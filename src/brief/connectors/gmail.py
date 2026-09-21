@@ -36,12 +36,30 @@ log = logging.getLogger(__name__)
 # never crosses the network, let alone becomes a token.
 BASE_QUERY = "-category:promotions -category:social -in:chats"
 
-_FETCH_SPEC = "(UID X-GM-MSGID X-GM-LABELS BODY.PEEK[]<0.16384>)"
+_FETCH_SPEC = "(UID X-GM-MSGID X-GM-LABELS BODY.PEEK[]<0.65536>)"
 _BATCH = 25
 
 _RE_MSGID = re.compile(rb"X-GM-MSGID\s+(\d+)")
 _RE_LABELS = re.compile(rb"X-GM-LABELS\s+\(([^)]*)\)")
 _RE_TAG = re.compile(r"<[^>]+>")
+# <style> and <script> bodies survive tag-stripping and flood the preview with
+# CSS, so their contents are removed before tags are.
+_RE_BLOCK = re.compile(
+    r"<(script|style|head)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL
+)
+_RE_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+# We fetch only the first 16KB of each message, so a long <style> block can be
+# cut off mid-way and never match the closed-block pattern above. Anything left
+# open at the truncation point is dropped wholesale.
+_RE_OPEN_BLOCK = re.compile(
+    r"<(script|style|head)\b[^>]*>.*$", re.IGNORECASE | re.DOTALL
+)
+# Zero-width padding marketers use to stretch the inbox preview line.
+# The fetch cut can also land mid-tag, leaving a dangling '<a href=...'.
+_RE_TRAILING_TAG = re.compile(r"<[^>]*$")
+_RE_INVISIBLE = re.compile(
+    "[\u200b-\u200d\u2060\ufeff\u034f\u00ad\u180e]"
+)
 _RE_LABEL_TOKEN = re.compile(r'"[^"]*"|\S+')
 _RE_WHITESPACE = re.compile(r"\s+")
 
@@ -108,10 +126,15 @@ def _preview(msg: Message, limit: int = 400) -> str:
         except LookupError:
             decoded = payload.decode("utf-8", errors="replace")
         if ctype == "text/html":
+            decoded = _RE_BLOCK.sub(" ", decoded)
+            decoded = _RE_OPEN_BLOCK.sub(" ", decoded)
+            decoded = _RE_COMMENT.sub(" ", decoded)
+            decoded = _RE_TRAILING_TAG.sub(" ", decoded)
             decoded = _RE_TAG.sub(" ", decoded)
         text = html.unescape(decoded)
         if ctype == "text/plain":
             break  # prefer plain text when both alternatives are present
+    text = _RE_INVISIBLE.sub("", text)
     return _RE_WHITESPACE.sub(" ", text).strip()[:limit]
 
 

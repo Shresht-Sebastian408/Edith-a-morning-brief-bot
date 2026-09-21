@@ -112,6 +112,11 @@ Google AI Pro also grants $10/month of Cloud credits usable for the Gemini API,
 but they must be activated manually via one.google.com and google.dev. You will
 not need them for this.
 
+Gemini's flagship returns 503 under load often enough to matter for an
+unattended job, so each call walks a fallback chain
+(`GEMINI_FALLBACK_MODELS`). This is not theoretical - it fired on the very
+first real run.
+
 To route the final brief through Claude while triage stays on Gemini, set
 `LLM_SYNTHESIS_PROVIDER=anthropic` and `ANTHROPIC_API_KEY`. Only the provider
 changes; no code does.
@@ -125,7 +130,7 @@ python -m brief --dry-run            # full pipeline, printed not sent
 python -m brief --dry-run --explain  # also show why each email was kept/dropped
 python -m brief --no-voice           # send text only
 python -m brief                      # for real
-pytest                               # 43 tests, no network needed
+pytest                               # 49 tests, no network needed
 ```
 
 Run `--agent email` before `--dry-run`. It prints raw triage as JSON, so when

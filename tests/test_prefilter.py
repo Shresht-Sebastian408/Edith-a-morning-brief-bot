@@ -103,3 +103,23 @@ def test_keywords_match_on_word_boundaries():
 )
 def test_calendar_criticality(title, expected):
     assert is_critical_event(title) is expected
+
+
+@pytest.mark.parametrize(
+    "sender,expected_verdict",
+    [
+        ("digest@mail.quora.com", Verdict.DROP),     # subdomain of a noise domain
+        ("x@notifications.facebook.com", Verdict.DROP),
+        ("noreply@unstop.news", Verdict.BOOST),      # separate notification domain
+        ("team@mail.devpost.com", Verdict.BOOST),    # subdomain of an always-keep
+        ("someone@notquora.com", Verdict.PASS),      # must NOT match "quora.com"
+    ],
+)
+def test_domain_matching_covers_subdomains_without_overmatching(sender, expected_verdict):
+    """Senders rarely mail from the bare registrable domain.
+
+    Regression test: exact set membership silently dropped Unstop's real mail,
+    which arrives from unstop.news rather than unstop.com.
+    """
+    verdict, reason = classify_email(email(sender_email=sender, subject="Update"))
+    assert verdict is expected_verdict, reason
