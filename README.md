@@ -1,4 +1,4 @@
-# EDITH A MORNING BRIEFING BOT
+# Edith, a morning briefing bot
 
 Every morning at 7am, a Telegram message tells me what actually needs my
 attention: the internship email worth opening, the assignment due today, and
@@ -81,12 +81,11 @@ App passwords need none of that, and they don't expire.
 3. Put it in `.env` as `GMAIL_APP_PASSWORD`, with your address as
    `GMAIL_ADDRESS`. Paste the spaces if you like, the code strips them.
 
-Worth knowing what you're trading here. An app password can read *and send*
-your mail, which is more than the read-only OAuth scope would have
-granted. This code only reads. It opens the mailbox `readonly=True` and fetches
-with `BODY.PEEK`, so nothing gets marked as read. But the credential itself
-allows more, so treat it like a password and revoke it from that same page the
-moment you stop using it.
+There's a real trade here. An app password can read *and send* your mail,
+where the OAuth scope would have been read-only. This code only reads: it opens
+the mailbox `readonly=True` and fetches with `BODY.PEEK`, so nothing is marked
+as read. The credential still allows more than that, so treat it like a password
+and revoke it when you stop using it.
 
 ### Calendar
 
@@ -114,16 +113,27 @@ and set `GEMINI_API_KEY`.
 A morning run costs roughly 4K input and 2.3K output tokens across two calls,
 which lands well inside the free tier. I've never paid for it.
 
-Gemini's flagship returns 503 more often than you'd expect. On my first real
-send, every model in the chain was saturated at once. Switching models doesn't
-help, since they share a backend, so each call now walks the chain three times
-with 0, 6 and 20 second gaps. The retry fixed it on the next run: three 503s,
-a six second wait, then the flagship answered. A cron job can afford twenty
-seconds. It can't afford to skip a day.
+Gemini's flagship, 3.8-flash, spent an entire afternoon returning 503 on
+every call while 3.5-flash answered every time. I tested two keys in different
+projects to rule out the key, and it made no difference. So 3.5-flash leads the
+chain and 3.8 sits at the end, ready for whenever Google's capacity recovers.
+
+Each call walks the chain three times with 0, 6 and 20 second gaps, and gives up
+after 100 seconds. A cron job can afford twenty seconds. It can't afford to skip
+a day, and it can't afford to hang either: an earlier version let the SDK's own
+internal retries run and one request sat there for two minutes.
 
 If you'd rather have Claude write the final brief and leave triage on Gemini,
 set `LLM_SYNTHESIS_PROVIDER=anthropic` and add `ANTHROPIC_API_KEY`. Nothing
 else changes.
+
+### Voice
+
+`TTS_VOICE` picks who reads the brief. Default is
+`en-US-EmmaMultilingualNeural`, chosen by generating the same brief in five
+voices and listening. The Multilingual ones are noticeably better than the
+regional ones. `edge-tts --list-voices` lists the rest, and `TTS_RATE` speeds
+her up or slows her down.
 
 ### ffmpeg, optional
 
@@ -197,10 +207,21 @@ The 16KB fetch limit cut newsletters off mid-`<style>`, which left the block
 unclosed, which made my cleanup regex eat the entire message and return nothing.
 Raised to 64KB.
 
-The one that bothered me most: when every connector was broken, the brief
-cheerfully announced "your inbox is clear". A confident
-lie you'd act on is worse than an error, so it now tells you the difference
-between a quiet day and a broken one.
+A GitHub notification email turned up in a brief as high priority, because I
+had listed github.com as a domain that always matters. Almost all of GitHub's
+mail is automated, so "Run failed: Morning Brief" made it into an actual
+morning brief. Removed.
+
+One 504 from Gemini cost me eight already-fetched emails. I had enumerated 503,
+429 and 404 as retryable and not 504, so it escaped, failed the whole email
+agent, and the rules fallback never ran. It now catches anything: whether the
+brief survives shouldn't depend on me guessing every error code a provider
+might invent.
+
+The one that bothered me most, though: when every connector was broken, the
+brief cheerfully announced "your inbox is clear". A confident lie you'd act on
+is worse than an error, so it now tells you the difference between a quiet day
+and a broken one.
 
 ## What's deliberately missing
 
