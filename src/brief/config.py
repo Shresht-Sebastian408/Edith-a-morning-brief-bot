@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     gemini_api_key: str = ""
 
+    # edge-tts voice. `edge-tts --list-voices` for the full set; the
+    # *Multilingual* ones sound noticeably better than the regional ones.
+    tts_voice: str = "en-US-EmmaMultilingualNeural"
+    tts_rate: str = "+8%"
+
     timezone: str = "Asia/Kolkata"
     lookback_hours: int = Field(default=24, ge=1, le=168)
 

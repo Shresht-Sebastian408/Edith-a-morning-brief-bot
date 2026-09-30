@@ -75,7 +75,9 @@ async def _run(args: argparse.Namespace) -> int:
         from brief.delivery.tts import synthesize
 
         try:
-            audio = await synthesize(brief.voice_script)
+            audio = await synthesize(
+                brief.voice_script, settings.tts_voice, settings.tts_rate
+            )
         except Exception as exc:  # noqa: BLE001
             # A missing voice note is a downgrade, not a reason to skip the brief.
             log.warning("voice synthesis failed, sending text only: %s", exc)
